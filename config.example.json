@@ -1,0 +1,66 @@
+{
+  "base_url": "https://jwgl.nustti.edu.cn",
+  "login_url": "https://jwgl.nustti.edu.cn/jsxsd/framework/jsMain.jsp",
+  "teachers": {
+    "某老师": {
+      "username": "teacher_account",
+      "password": "REPLACE_ME"
+    },
+    "另一位老师": {
+      "username": "another_teacher_account",
+      "password": "REPLACE_ME"
+    },
+    "默认": {
+      "username": "default_user",
+      "password": "REPLACE_ME"
+    }
+  },
+  "selectors": {
+    "login": {
+      "username": { "by": "id", "value": "userAccount" },
+      "password": { "by": "id", "value": "userPassword" },
+      "login_button": { "by": "css", "value": "button.login_btn" }
+    },
+    "queries": {
+      "invigilation": {
+        "direct_path": "",
+        "menu_parent": { "by": "xpath", "value": "//div[@id='onesidebar']//li[@data-code='NEW_JSD_KWCJ']" },
+        "menu_child": { "by": "xpath", "value": "//aside[contains(@class,'main-sidebar')]//li[@data-code='NEW_JSD_KWCJ_KSSW']//li[@data-url='/jskw/jskwap_query']" },
+        "query_frame": { "by": "id", "value": "" },
+        "term_select": { "by": "id", "value": "xnxqid" },
+        "query_button": { "by": "xpath", "value": "//*[@id='btn_query']" },
+        "result_frame": { "by": "id", "value": "fcenter" },
+        "table_id": "dataList"
+      },
+      "course_schedule": {
+        "menu_parent": { "by": "xpath", "value": "" },
+        "menu_child": { "by": "xpath", "value": "" },
+        "query_frame": { "by": "id", "value": "" },
+        "term_select": { "by": "id", "value": "" },
+        "query_button": { "by": "xpath", "value": "" },
+        "result_frame": { "by": "id", "value": "" },
+        "table_id": "dataList"
+      },
+      "exam_course_arrangement": {
+        "direct_path": "",
+        "menu_parent": { "by": "xpath", "value": "//div[@id='onesidebar']//li[@data-code='NEW_JSD_KWCJ']" },
+        "menu_child": { "by": "xpath", "value": "//aside[contains(@class,'main-sidebar')]//li[@data-code='NEW_JSD_KWCJ_KSSW']//li[@data-url='/jskw/jskckwap_query']" },
+        "query_frame": { "by": "id", "value": "" },
+        "term_select": { "by": "id", "value": "xnxqid" },
+        "query_button": { "by": "xpath", "value": "//*[@id='btn_query']" },
+        "result_frame": { "by": "id", "value": "fcenter" },
+        "table_id": "dataList"
+      },
+      "exam_info": {
+        "direct_path": "",
+        "menu_parent": { "by": "xpath", "value": "//div[@id='onesidebar']//li[@data-code='NEW_JSD_KWCJ']" },
+        "menu_child": { "by": "xpath", "value": "//aside[contains(@class,'main-sidebar')]//li[@data-code='NEW_JSD_KWCJ_KSSW']//li[@data-url='/jskw/jsxxap_query']" },
+        "query_frame": { "by": "id", "value": "" },
+        "term_select": { "by": "id", "value": "xnxqid" },
+        "query_button": { "by": "xpath", "value": "//*[@id='btn_query']" },
+        "result_frame": { "by": "id", "value": "fcenter" },
+        "table_id": "dataList"
+      }
+    }
+  }
+}
