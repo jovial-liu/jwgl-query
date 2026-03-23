@@ -6,11 +6,9 @@ import csv
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -122,6 +120,21 @@ def build_driver(chromedriver_path: str | None = None, headless: bool = False):
     return webdriver.Chrome(service=service, options=options)
 
 
+def wait_for_ready(driver, wait: int = 20):
+    WebDriverWait(driver, wait, poll_frequency=0.5).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
+
+
+def is_login_page(driver) -> bool:
+    try:
+        title = (driver.title or "").strip()
+        page = driver.page_source or ""
+        return title == "登录" or 'id="userAccount"' in page or 'name="userAccount"' in page
+    except Exception:
+        return False
+
+
 def locate(driver, selector: dict[str, str], wait: int = 15, clickable: bool = False):
     if not selector or not selector.get("value"):
         raise ValueError("Missing selector value in config")
@@ -129,6 +142,16 @@ def locate(driver, selector: dict[str, str], wait: int = 15, clickable: bool = F
     value = selector["value"]
     condition = EC.element_to_be_clickable((by, value)) if clickable else EC.presence_of_element_located((by, value))
     return WebDriverWait(driver, wait, poll_frequency=0.5).until(condition)
+
+
+def has_selector(driver, selector: dict[str, str]) -> bool:
+    if not selector or not selector.get("value"):
+        return False
+    try:
+        by = BY_MAP[selector["by"]]
+        return bool(driver.find_elements(by, selector["value"]))
+    except Exception:
+        return False
 
 
 def click(driver, selector: dict[str, str], wait: int = 15, js_fallback: bool = True):
@@ -142,9 +165,12 @@ def click(driver, selector: dict[str, str], wait: int = 15, js_fallback: bool = 
 
 
 def switch_to_frame(driver, selector: dict[str, str], wait: int = 15):
+    if not selector or not selector.get("value"):
+        raise ValueError("Missing selector value in config")
     by = BY_MAP[selector["by"]]
     value = selector["value"]
     WebDriverWait(driver, wait, poll_frequency=0.5).until(EC.frame_to_be_available_and_switch_to_it((by, value)))
+    wait_for_ready(driver, wait=wait)
 
 
 def switch_to_visible_content_frame(driver, wait: int = 20):
@@ -160,6 +186,34 @@ def switch_to_visible_content_frame(driver, wait: int = 20):
         return False
 
     WebDriverWait(driver, wait, poll_frequency=0.5).until(_find_visible_frame)
+    wait_for_ready(driver, wait=wait)
+
+
+def switch_to_query_context(driver, used_direct_path: bool, wait: int = 20):
+    driver.switch_to.default_content()
+    if used_direct_path:
+        wait_for_ready(driver, wait=wait)
+        return
+    switch_to_visible_content_frame(driver, wait=wait)
+
+
+def fill_input(driver, selector: dict[str, str], value: str, clear_hidden_pair_selector: dict[str, str] | None = None, wait: int = 20):
+    elem = locate(driver, selector, wait=wait)
+    if clear_hidden_pair_selector and has_selector(driver, clear_hidden_pair_selector):
+        hidden = locate(driver, clear_hidden_pair_selector, wait=wait)
+        driver.execute_script("arguments[0].value='';", hidden)
+    try:
+        elem.clear()
+    except Exception:
+        pass
+    elem.send_keys(value)
+    try:
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input', {bubbles:true})); arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+            elem,
+        )
+    except Exception:
+        pass
 
 
 def scrape_table(driver, table_id: str) -> list[dict[str, str]]:
@@ -178,12 +232,14 @@ def scrape_table(driver, table_id: str) -> list[dict[str, str]]:
         if len(cells) != len(headers):
             continue
         values = [cell.get_text(strip=True) for cell in cells]
+        if len(values) == 1 and values[0] == "未查询到数据":
+            continue
         rows.append(dict(zip(headers, values)))
     return rows
 
 
 def parse_course_cell(cell) -> list[dict[str, str]]:
-    blocks = cell.find_all("div", class_=re.compile(r"\bkbcontent\b"))
+    blocks = cell.find_all("div", class_=re.compile(r"\bkbcontent\d*\b"))
     candidates: list[dict[str, str]] = []
     for block in blocks:
         text = block.get_text("\n", strip=True).replace("\xa0", " ").strip()
@@ -201,14 +257,17 @@ def parse_course_cell(cell) -> list[dict[str, str]]:
         for line in lines[1:]:
             if line.endswith("周") and not week_text:
                 week_text = line
-            elif "[" in line and "]节" in line and not room_text:
-                room_text = line
+            elif ("[" in line and "]节" in line) or re.search(r"[A-Za-z\u4e00-\u9fa5]+楼", line):
+                if not room_text:
+                    room_text = line
+                else:
+                    extras.append(line)
             elif re.search(r":\d+$", line) and not class_text:
                 class_text = line
                 parts = line.rsplit(":", 1)
                 if len(parts) == 2 and parts[1].isdigit():
                     headcount = parts[1]
-            else:
+            elif line not in {course_name}:
                 extras.append(line)
         candidates.append(
             {
@@ -220,50 +279,42 @@ def parse_course_cell(cell) -> list[dict[str, str]]:
                 "附加信息": "；".join(extras),
             }
         )
+    return candidates
 
-    merged: dict[tuple[str, str, str, str], dict[str, str]] = {}
-    for item in candidates:
-        dedupe_key = (item["课程名称"], item["周次"], item["教室"], item["班级"])
-        existing = merged.get(dedupe_key)
-        if not existing:
-            merged[dedupe_key] = item
+
+def parse_teacher_schedule_html(html: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", id="kbtable")
+    if not table:
+        return []
+    tbody = table.find("tbody") or table
+    row = tbody.find("tr")
+    if not row:
+        return []
+    cells = row.find_all("td")
+    if len(cells) < 2:
+        return []
+
+    day_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    periods = ["0102", "0304", "0506", "0708", "091011"]
+    rows: list[dict[str, str]] = []
+
+    for idx, cell in enumerate(cells[1:]):
+        entries = parse_course_cell(cell)
+        if not entries:
             continue
-        if not existing.get("人数") and item.get("人数"):
-            existing["人数"] = item["人数"]
-        extras = [x for x in [existing.get("附加信息", ""), item.get("附加信息", "")] if x]
-        if extras:
-            uniq_extras = []
-            seen_extra = set()
-            for extra_block in extras:
-                for part in [p.strip() for p in extra_block.split("；") if p.strip()]:
-                    if part not in seen_extra:
-                        seen_extra.add(part)
-                        uniq_extras.append(part)
-            existing["附加信息"] = "；".join(uniq_extras)
-
-    refined: dict[tuple[str, str, str], dict[str, str]] = {}
-    for item in merged.values():
-        coarse_key = (item["课程名称"], item["周次"], item["教室"])
-        existing = refined.get(coarse_key)
-        if not existing:
-            refined[coarse_key] = item
-            continue
-        if not existing.get("班级") and item.get("班级"):
-            existing["班级"] = item["班级"]
-        if not existing.get("人数") and item.get("人数"):
-            existing["人数"] = item["人数"]
-        extras = [x for x in [existing.get("附加信息", ""), item.get("附加信息", "")] if x]
-        if extras:
-            uniq_extras = []
-            seen_extra = set()
-            for extra_block in extras:
-                for part in [p.strip() for p in extra_block.split("；") if p.strip()]:
-                    if part not in seen_extra:
-                        seen_extra.add(part)
-                        uniq_extras.append(part)
-            existing["附加信息"] = "；".join(uniq_extras)
-
-    return list(refined.values())
+        day = day_names[idx // 5]
+        period = periods[idx % 5]
+        for entry in entries:
+            rows.append(
+                {
+                    "星期": day,
+                    "节次": period,
+                    "时间": "",
+                    **entry,
+                }
+            )
+    return rows
 
 
 def parse_course_schedule_html(html: str) -> list[dict[str, str]]:
@@ -271,6 +322,11 @@ def parse_course_schedule_html(html: str) -> list[dict[str, str]]:
     table = soup.find("table", id="kbtable")
     if not table:
         return []
+
+    text = table.get_text("\n", strip=True)
+    if "教师\\节次" in text:
+        return parse_teacher_schedule_html(html)
+
     tbody = table.find("tbody") or table
     trs = tbody.find_all("tr")
     if len(trs) < 2:
@@ -302,76 +358,52 @@ def parse_course_schedule_html(html: str) -> list[dict[str, str]]:
     return rows
 
 
-def infer_current_week_from_calendar(config_path: str, teacher_name: str, headless: bool = True) -> str:
-    config = load_config(config_path)
-    creds = get_teacher_creds(config, teacher_name)
-    if not creds:
-        return ""
-    login = config.get("selectors", {}).get("login", {})
-    driver = build_driver(headless=headless)
+def login_once(driver, login_url: str, login: dict[str, Any], creds: dict[str, Any], save_step=None, wait: int = 30):
+    driver.get(login_url)
+    wait_for_ready(driver, wait=wait)
+    if save_step:
+        save_step("01-login-page")
+
+    username = locate(driver, login["username"])
+    username.clear()
+    username.send_keys(creds["username"])
+    password = locate(driver, login["password"])
+    password.clear()
+    password.send_keys(creds["password"])
     try:
-        driver.get(config["login_url"])
-        username = locate(driver, login["username"])
-        username.clear()
-        username.send_keys(creds["username"])
-        password = locate(driver, login["password"])
-        password.clear()
-        password.send_keys(creds["password"])
-        try:
-            driver.execute_script("if (typeof submitForm1 === 'function' && submitForm1()) { document.getElementById('Form1').submit(); }")
-        except Exception:
-            click(driver, login["login_button"])
-        WebDriverWait(driver, 30, poll_frequency=0.5).until(lambda d: 'jsMain.jsp' in d.current_url or '教学一体化服务平台' in d.title)
-        time.sleep(2)
-
-        click(driver, {"by": "xpath", "value": "//div[@id='onesidebar']//li[@data-code='NEW_JSD_WDZM']"})
-        time.sleep(1)
-        child = locate(driver, {"by": "xpath", "value": "//aside[contains(@class,'main-sidebar')]//li[@data-code='NEW_JSD_WDZM_JSZL']//li[@data-url='/jxzl/jxzl_query']"}, wait=20, clickable=False)
-        driver.execute_script("arguments[0].click();", child)
-        time.sleep(2)
-
-        driver.switch_to.default_content()
-        switch_to_visible_content_frame(driver)
-        html = driver.page_source
-        soup = BeautifulSoup(html, "html.parser")
-        today = datetime.now().day
-        month = datetime.now().month
-        for tr in (soup.find("table", id="kbtable") or soup).find_all("tr"):
-            first_td = tr.find("td")
-            if not first_td:
-                continue
-            week_no = first_td.get_text(strip=True)
-            tds = tr.find_all("td")
-            for td in tds[1:8]:
-                title = (td.get("title") or "").strip()
-                if f"年{month:02d}月{today:02d}" in title or f"年{month}月{today:02d}" in title or f"年{month}月{today}" in title:
-                    return week_no
-        return ""
+        driver.execute_script("if (typeof submitForm1 === 'function' && submitForm1()) { document.getElementById('Form1').submit(); }")
     except Exception:
-        return ""
-    finally:
-        driver.quit()
+        click(driver, login["login_button"])
+
+    try:
+        alert = WebDriverWait(driver, 3).until(EC.alert_is_present())
+        alert.accept()
+    except Exception:
+        pass
+
+    WebDriverWait(driver, wait, poll_frequency=0.5).until(lambda d: 'jsMain.jsp' in d.current_url or '教学一体化服务平台' in d.title)
+    time.sleep(2)
+    if save_step:
+        save_step("02-after-login")
 
 
-def week_matches(current_week: str, week_text: str) -> bool:
-    if not current_week:
+def navigate_to_query_page(driver, config: dict[str, Any], query: dict[str, Any], save_step, wait: int = 20) -> bool:
+    direct_path = query.get("direct_path")
+    if direct_path:
+        target_url = urljoin(config.get("base_url", config.get("login_url", "")), direct_path)
+        driver.get(target_url)
+        wait_for_ready(driver, wait=wait)
+        time.sleep(1)
+        save_step("03-direct-target")
         return True
-    if not week_text:
-        return False
-    week_num = int(current_week)
-    normalized = week_text.replace("第", "").replace("周", "")
-    parts = re.split(r"[;,，；\s]+", normalized)
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if re.fullmatch(r"\d+", part):
-            if int(part) == week_num:
-                return True
-            continue
-        m = re.fullmatch(r"(\d+)-(\d+)", part)
-        if m and int(m.group(1)) <= week_num <= int(m.group(2)):
-            return True
+
+    click(driver, query["menu_parent"], wait=wait)
+    time.sleep(1)
+    save_step("03-after-parent-click")
+    child = locate(driver, query["menu_child"], wait=wait, clickable=False)
+    driver.execute_script("arguments[0].click();", child)
+    time.sleep(2)
+    save_step("04-after-child-click")
     return False
 
 
@@ -389,6 +421,7 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
     debug_path = Path(debug_dir) if debug_dir else None
     if debug_path:
         debug_path.mkdir(parents=True, exist_ok=True)
+
     try:
         def save_step(name: str):
             if not debug_path:
@@ -409,95 +442,105 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
             pass
 
         driver.set_page_load_timeout(30)
-        driver.get(login_url)
-        save_step('01-login-page')
-        username = locate(driver, login["username"])
-        username.clear()
-        username.send_keys(creds["username"])
-        password = locate(driver, login["password"])
-        password.clear()
-        password.send_keys(creds["password"])
-        try:
-            driver.execute_script("if (typeof submitForm1 === 'function' && submitForm1()) { document.getElementById('Form1').submit(); }")
-        except Exception:
-            click(driver, login["login_button"])
+        login_once(driver, login_url, login, creds, save_step=save_step)
 
-        try:
-            alert = WebDriverWait(driver, 3).until(EC.alert_is_present())
-            alert.accept()
-        except Exception:
-            pass
+        used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+        if is_login_page(driver):
+            login_once(driver, login_url, login, creds, save_step=save_step)
+            used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+        switch_to_query_context(driver, used_direct_path)
+        if is_login_page(driver):
+            login_once(driver, login_url, login, creds, save_step=save_step)
+            used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+            switch_to_query_context(driver, used_direct_path)
+        save_step("05-in-query-context")
 
-        WebDriverWait(driver, 30, poll_frequency=0.5).until(lambda d: 'jsMain.jsp' in d.current_url or '教学一体化服务平台' in d.title)
-        time.sleep(2)
-        save_step('02-after-login')
-
-        direct_path = query.get("direct_path")
-        if direct_path:
-            target_url = urljoin(config.get("base_url", login_url), direct_path)
-            driver.get(target_url)
-            time.sleep(2)
-            save_step('03-direct-target')
-        else:
-            click(driver, query["menu_parent"])
-            time.sleep(1)
-            save_step('03-after-parent-click')
-            child = locate(driver, query["menu_child"], wait=20, clickable=False)
-            driver.execute_script("arguments[0].click();", child)
-            time.sleep(2)
-            save_step('04-after-child-click')
-
-        driver.switch_to.default_content()
-        switch_to_visible_content_frame(driver)
-        save_step('05-in-visible-frame')
-
-        if query_type == "course_schedule":
-            target_term = term or locate(driver, query["term_select"], wait=20).get_attribute("value")
+        if query.get("term_select", {}).get("value"):
+            select_element = locate(driver, query["term_select"], wait=20)
+            target_term = term or select_element.get_attribute("value") or select_element.get_dom_attribute("value")
             if target_term:
-                select_element = locate(driver, query["term_select"], wait=20)
                 current_term = select_element.get_attribute("value")
                 if current_term != target_term:
                     Select(select_element).select_by_value(target_term)
-                    time.sleep(2)
-                    save_step('06-after-term-select')
-            current_week = infer_current_week_from_calendar(config_path, teacher_name, headless=headless)
+                    time.sleep(1)
+                    save_step("06-after-term-select")
+
+        if query_type == "course_schedule" and query.get("teacher_input", {}).get("value"):
+            fill_input(
+                driver,
+                query["teacher_input"],
+                teacher_name,
+                clear_hidden_pair_selector=query.get("teacher_id_input"),
+                wait=20,
+            )
+            save_step("07-after-teacher-input")
+
+        if query_type == "course_schedule":
+            pre_rows = parse_course_schedule_html(driver.page_source)
+            if pre_rows:
+                save_step("08-course-table-already-present")
+                return pre_rows
+
+        if query.get("query_button", {}).get("value"):
+            click(driver, query["query_button"], wait=20)
+            time.sleep(2)
+            save_step("08-after-query-click")
+        elif query_type == "course_schedule":
+            time.sleep(1)
+
+        if query.get("result_frame", {}).get("value"):
+            try:
+                switch_to_frame(driver, query["result_frame"], wait=20)
+                if is_login_page(driver):
+                    raise RuntimeError("result_frame_redirected_to_login")
+                time.sleep(1)
+                save_step("09-in-result-frame")
+            except Exception:
+                if query_type != "course_schedule" and used_direct_path:
+                    login_once(driver, login_url, login, creds, save_step=save_step)
+                    used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+                    switch_to_query_context(driver, used_direct_path)
+                    if query.get("term_select", {}).get("value"):
+                        select_element = locate(driver, query["term_select"], wait=20)
+                        target_term = term or select_element.get_attribute("value") or select_element.get_dom_attribute("value")
+                        if target_term:
+                            current_term = select_element.get_attribute("value")
+                            if current_term != target_term:
+                                Select(select_element).select_by_value(target_term)
+                                time.sleep(1)
+                    if query.get("query_button", {}).get("value"):
+                        click(driver, query["query_button"], wait=20)
+                        time.sleep(2)
+                    switch_to_frame(driver, query["result_frame"], wait=20)
+                    time.sleep(1)
+                    save_step("09-in-result-frame")
+                else:
+                    raise
+
+        if query_type == "course_schedule":
             rows = parse_course_schedule_html(driver.page_source)
-            if current_week:
-                rows = [row for row in rows if week_matches(current_week, row.get("周次", ""))]
             if rows:
                 return rows
         else:
-            if query.get("term_select", {}).get("value"):
-                select_element = locate(driver, query["term_select"], wait=20)
-                Select(select_element).select_by_value(term)
-                save_step('06-after-term-select')
-            if query.get("query_button", {}).get("value"):
-                click(driver, query["query_button"], wait=20)
-                time.sleep(2)
-                save_step('07-after-query-click')
-
-            rows = scrape_table(driver, query.get("table_id", "dataList"))
-            if rows:
-                return rows
-
-        if query.get("result_frame", {}).get("value"):
-            driver.switch_to.default_content()
-            switch_to_visible_content_frame(driver)
-            switch_to_frame(driver, query["result_frame"], wait=20)
-            WebDriverWait(driver, 20, poll_frequency=0.5).until(lambda d: d.execute_script("return document.readyState") == "complete")
-            time.sleep(2)
-            save_step('08-in-result-frame')
             rows = scrape_table(driver, query.get("table_id", "dataList"))
             if rows:
                 return rows
 
         driver.switch_to.default_content()
-        switch_to_visible_content_frame(driver)
-        time.sleep(2)
-        save_step('09-after-reenter-frame')
+        if not used_direct_path:
+            try:
+                switch_to_visible_content_frame(driver, wait=10)
+                save_step("10-after-reenter-frame")
+                if query_type == "course_schedule":
+                    return parse_course_schedule_html(driver.page_source)
+                return scrape_table(driver, query.get("table_id", "dataList"))
+            except Exception:
+                pass
+
         if query_type == "course_schedule":
             return parse_course_schedule_html(driver.page_source)
         return scrape_table(driver, query.get("table_id", "dataList"))
+
     except Exception as exc:
         state = {
             "error": str(exc),
