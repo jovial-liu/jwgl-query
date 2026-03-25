@@ -68,7 +68,7 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 优先按下面这种方式理解并处理用户请求：
 
 - “查叶老师这周课表”
-- “查叶志鹏 2025-2026-2 的监考安排”
+- “查叶老师 2025-2026-2 的监考安排”
 - “查考试安排”
 - “添加叶老师账号，账号是 xxx，密码是 xxx”
 - “删除叶老师信息”
