@@ -6,12 +6,12 @@ import sys
 import time
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from crawl import load_config, build_driver, locate, click, switch_to_visible_content_frame
-from selenium.webdriver.common.by import By
+from crawl import build_driver, click, ensure_teacher_record, load_config, locate, resolve_school_config, switch_to_visible_content_frame
 
 
 def main() -> None:
@@ -20,12 +20,14 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     config = load_config(str(config_path))
-    teacher = config["teachers"][config.get("current_teacher") or "默认"]
+    teacher_name = config.get("current_teacher") or "默认"
+    teacher = ensure_teacher_record(config, teacher_name)
+    _, school = resolve_school_config(config, teacher_name, teacher)
     login = config["selectors"]["login"]
 
     driver = build_driver(headless=True)
     try:
-        driver.get(config["login_url"])
+        driver.get(school["login_url"])
         locate(driver, login["username"]).send_keys(teacher["username"])
         locate(driver, login["password"]).send_keys(teacher["password"])
         try:

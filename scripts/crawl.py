@@ -32,6 +32,8 @@ if str(SCRIPT_DIR) not in sys.path:
 DEFAULT_COLS = [
     "校区", "考场校区", "考试场次", "课程代码", "课程名称", "授课教师", "考试时间", "考场", "类别", "考生数"
 ]
+DEFAULT_LOGIN_PATH = "/jsxsd/framework/jsMain.jsp"
+LEGACY_SCHOOL_NAME = "默认学校"
 
 COURSE_SCHEDULE_COLS = [
     "星期",
@@ -55,10 +57,60 @@ BY_MAP = {
 
 def load_config(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+    bootstrap_legacy_school(config)
+    return config
 
 
-def get_teacher_creds(config: dict[str, Any], teacher_name: str) -> dict[str, Any]:
+def normalize_url(url: str | None) -> str:
+    return (url or "").strip().rstrip("/")
+
+
+def derive_login_url(base_url: str) -> str:
+    cleaned = normalize_url(base_url)
+    if not cleaned:
+        return ""
+    return f"{cleaned}{DEFAULT_LOGIN_PATH}"
+
+
+def bootstrap_legacy_school(config: dict[str, Any]) -> None:
+    schools = config.get("schools")
+    if schools is not None and not isinstance(schools, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "INVALID_CONFIG",
+            "message": "config.json 中的 schools 必须是对象",
+        }, ensure_ascii=False))
+    if schools:
+        return
+
+    base_url = normalize_url(config.get("base_url"))
+    login_url = normalize_url(config.get("login_url")) or derive_login_url(base_url)
+    if not base_url and not login_url:
+        config.setdefault("schools", {})
+        return
+
+    school_name = (config.get("current_school") or LEGACY_SCHOOL_NAME).strip() or LEGACY_SCHOOL_NAME
+    config["schools"] = {
+        school_name: {
+            "base_url": base_url,
+            "login_url": login_url,
+        }
+    }
+    config["current_school"] = school_name
+
+
+def get_school_map(config: dict[str, Any]) -> dict[str, Any]:
+    bootstrap_legacy_school(config)
+    schools = config.get("schools", {})
+    if not isinstance(schools, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "INVALID_CONFIG",
+            "message": "config.json 中的 schools 必须是对象",
+        }, ensure_ascii=False))
+    return schools
+
+
+def get_teacher_record(config: dict[str, Any], teacher_name: str) -> dict[str, Any]:
     teachers = config.get("teachers", {})
     current_teacher = config.get("current_teacher")
     normalized = (teacher_name or "").strip()
@@ -71,15 +123,59 @@ def get_teacher_creds(config: dict[str, Any], teacher_name: str) -> dict[str, An
     )
 
 
-def ensure_teacher_creds(config_path: str, teacher_name: str) -> dict[str, Any]:
-    config = load_config(config_path)
-    creds = get_teacher_creds(config, teacher_name)
-    if creds:
-        return creds
+def ensure_teacher_record(config: dict[str, Any], teacher_name: str) -> dict[str, Any]:
+    teacher = get_teacher_record(config, teacher_name)
+    if teacher:
+        return teacher
     raise RuntimeError(json.dumps({
         "error_code": "MISSING_TEACHER_CREDENTIALS",
         "teacher": teacher_name,
         "message": f"未找到老师账号信息：{teacher_name}",
+    }, ensure_ascii=False))
+
+
+def resolve_school_config(config: dict[str, Any], teacher_name: str, teacher: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    schools = get_school_map(config)
+    teacher_school = (teacher.get("school") or "").strip()
+    if teacher_school:
+        school = schools.get(teacher_school)
+        if not school:
+            raise RuntimeError(json.dumps({
+                "error_code": "TEACHER_SCHOOL_NOT_FOUND",
+                "teacher": teacher_name,
+                "school": teacher_school,
+                "message": f"老师 {teacher_name} 绑定的学校不存在：{teacher_school}",
+            }, ensure_ascii=False))
+        return teacher_school, school
+
+    current_school = (config.get("current_school") or "").strip()
+    if current_school:
+        school = schools.get(current_school)
+        if not school:
+            raise RuntimeError(json.dumps({
+                "error_code": "CURRENT_SCHOOL_NOT_FOUND",
+                "school": current_school,
+                "message": f"当前学校不存在：{current_school}",
+            }, ensure_ascii=False))
+        return current_school, school
+
+    if len(schools) == 1:
+        school_name, school = next(iter(schools.items()))
+        return school_name, school
+
+    if not schools:
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_SCHOOL_URLS",
+            "teacher": teacher_name,
+            "message": "还没有保存学校 URL 信息",
+            "required": ["school", "base_url"],
+        }, ensure_ascii=False))
+
+    raise RuntimeError(json.dumps({
+        "error_code": "MISSING_SCHOOL_SELECTION",
+        "teacher": teacher_name,
+        "message": "已保存多个学校 URL，请先指定要使用的学校",
+        "schools": sorted(schools.keys()),
     }, ensure_ascii=False))
 
 
@@ -407,15 +503,21 @@ def navigate_to_query_page(driver, config: dict[str, Any], query: dict[str, Any]
     return False
 
 
-def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str, headless: bool = False, debug_dir: str | None = None) -> list[dict[str, str]]:
+def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str, headless: bool = False, debug_dir: str | None = None) -> tuple[str, list[dict[str, str]]]:
     config = load_config(config_path)
-    creds = ensure_teacher_creds(config_path, teacher_name)
+    teacher = ensure_teacher_record(config, teacher_name)
+    school_name, school = resolve_school_config(config, teacher_name, teacher)
 
     login = config.get("selectors", {}).get("login", {})
     query = config.get("selectors", {}).get("queries", {}).get(query_type)
-    login_url = config.get("login_url")
+    login_url = normalize_url(school.get("login_url")) or derive_login_url(school.get("base_url"))
+    base_url = normalize_url(school.get("base_url")) or normalize_url(login_url)
     if not login_url or not query:
         raise SystemExit(f"Missing login_url or query config for {query_type}")
+
+    active_config = dict(config)
+    active_config["base_url"] = base_url
+    active_config["login_url"] = login_url
 
     driver = build_driver(headless=headless)
     debug_path = Path(debug_dir) if debug_dir else None
@@ -442,16 +544,16 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
             pass
 
         driver.set_page_load_timeout(30)
-        login_once(driver, login_url, login, creds, save_step=save_step)
+        login_once(driver, login_url, login, teacher, save_step=save_step)
 
-        used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+        used_direct_path = navigate_to_query_page(driver, active_config, query, save_step)
         if is_login_page(driver):
-            login_once(driver, login_url, login, creds, save_step=save_step)
-            used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+            login_once(driver, login_url, login, teacher, save_step=save_step)
+            used_direct_path = navigate_to_query_page(driver, active_config, query, save_step)
         switch_to_query_context(driver, used_direct_path)
         if is_login_page(driver):
-            login_once(driver, login_url, login, creds, save_step=save_step)
-            used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+            login_once(driver, login_url, login, teacher, save_step=save_step)
+            used_direct_path = navigate_to_query_page(driver, active_config, query, save_step)
             switch_to_query_context(driver, used_direct_path)
         save_step("05-in-query-context")
 
@@ -479,7 +581,7 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
             pre_rows = parse_course_schedule_html(driver.page_source)
             if pre_rows:
                 save_step("08-course-table-already-present")
-                return pre_rows
+                return school_name, pre_rows
 
         if query.get("query_button", {}).get("value"):
             click(driver, query["query_button"], wait=20)
@@ -497,8 +599,8 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
                 save_step("09-in-result-frame")
             except Exception:
                 if query_type != "course_schedule" and used_direct_path:
-                    login_once(driver, login_url, login, creds, save_step=save_step)
-                    used_direct_path = navigate_to_query_page(driver, config, query, save_step)
+                    login_once(driver, login_url, login, teacher, save_step=save_step)
+                    used_direct_path = navigate_to_query_page(driver, active_config, query, save_step)
                     switch_to_query_context(driver, used_direct_path)
                     if query.get("term_select", {}).get("value"):
                         select_element = locate(driver, query["term_select"], wait=20)
@@ -520,11 +622,11 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
         if query_type == "course_schedule":
             rows = parse_course_schedule_html(driver.page_source)
             if rows:
-                return rows
+                return school_name, rows
         else:
             rows = scrape_table(driver, query.get("table_id", "dataList"))
             if rows:
-                return rows
+                return school_name, rows
 
         driver.switch_to.default_content()
         if not used_direct_path:
@@ -532,14 +634,14 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
                 switch_to_visible_content_frame(driver, wait=10)
                 save_step("10-after-reenter-frame")
                 if query_type == "course_schedule":
-                    return parse_course_schedule_html(driver.page_source)
-                return scrape_table(driver, query.get("table_id", "dataList"))
+                    return school_name, parse_course_schedule_html(driver.page_source)
+                return school_name, scrape_table(driver, query.get("table_id", "dataList"))
             except Exception:
                 pass
 
         if query_type == "course_schedule":
-            return parse_course_schedule_html(driver.page_source)
-        return scrape_table(driver, query.get("table_id", "dataList"))
+            return school_name, parse_course_schedule_html(driver.page_source)
+        return school_name, scrape_table(driver, query.get("table_id", "dataList"))
 
     except Exception as exc:
         state = {
@@ -547,6 +649,7 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
             "type": exc.__class__.__name__,
             "url": "",
             "title": "",
+            "school": school_name,
             "traceback": traceback.format_exc(),
         }
         try:
@@ -595,7 +698,7 @@ def main() -> None:
         merged_rows: list[dict[str, str]] = []
         details: list[dict[str, Any]] = []
         for subtype in subtypes:
-            rows = run_crawler(
+            school_name, rows = run_crawler(
                 args.config,
                 args.teacher,
                 args.term,
@@ -609,6 +712,7 @@ def main() -> None:
         output = {
             "query_type": args.query_type,
             "teacher": args.teacher,
+            "school": school_name,
             "term": args.term,
             "count": len(merged_rows),
             "rows": merged_rows,
@@ -617,8 +721,8 @@ def main() -> None:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         final_rows = merged_rows
     else:
-        rows = run_crawler(args.config, args.teacher, args.term, query_type=args.query_type, headless=args.headless, debug_dir=args.debug_dir or None)
-        print(json.dumps({"query_type": args.query_type, "teacher": args.teacher, "term": args.term, "count": len(rows), "rows": rows}, ensure_ascii=False, indent=2))
+        school_name, rows = run_crawler(args.config, args.teacher, args.term, query_type=args.query_type, headless=args.headless, debug_dir=args.debug_dir or None)
+        print(json.dumps({"query_type": args.query_type, "teacher": args.teacher, "school": school_name, "term": args.term, "count": len(rows), "rows": rows}, ensure_ascii=False, indent=2))
         final_rows = rows
 
     if args.out:

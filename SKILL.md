@@ -1,6 +1,6 @@
 ---
 name: jwgl-query
-description: Query a university jwgl/教务系统 for teacher-facing academic-office data such as 课程表、监考安排、考务安排、课程考试安排、考试信息. Use when the user asks to 查课程表、查监考安排、查考务安排、查课程考试安排、查考试信息、查考试安排，或要求从教务系统按教师/学期提取表格结果。适合 legacy iframe-heavy jwgl sites with stored local credentials.
+description: Query a university jwgl/教务系统 for teacher-facing data such as 课程表 and 考试相关信息（监考/考务安排、课程考试安排、考试信息）. Also manage saved school URLs and teacher credentials through natural language. Use when the user asks to 查课程表、查考试安排、查监考/考务安排、添加学校 URL，或要求从教务系统按教师/学期提取表格结果。适合 legacy iframe-heavy jwgl sites with stored local credentials.
 ---
 
 # JWGL Query
@@ -18,8 +18,10 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 
 - 查叶老师这周课表
 - 查考试安排
+- 添加学校，学校叫南理工泰州科技学院，地址是 https://jwgl.nustti.edu.cn
 - 添加叶老师账号
 - 删除叶老师信息
+- 删除某学校 URL
 - 把叶老师设为当前老师
 
 然后由 agent：
@@ -44,11 +46,9 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 优先用这个 skill 处理以下需求：
 
 - 查课程表
-- 查监考安排
-- 查考务安排
-- 查课程考试安排
-- 查考试信息
-- 查考试安排
+- 查考试相关信息（监考安排、考务安排、课程考试安排、考试信息）
+- 查考试安排（默认走 `exam_all` 聚合查询）
+- 管理学校 URL（新增、更新、删除、设置当前学校）
 - 按教师 + 学期查询教务系统表格
 
 如果用户只说“查考试安排”，优先用 `exam_all`。
@@ -70,13 +70,17 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 - “查叶老师这周课表”
 - “查叶老师 2025-2026-2 的监考安排”
 - “查考试安排”
+- “添加学校，学校叫南理工泰州科技学院，地址是 https://jwgl.nustti.edu.cn”
+- “把南理工泰州科技学院设为当前学校”
 - “添加叶老师账号，账号是 xxx，密码是 xxx”
 - “删除叶老师信息”
+- “删除南理工泰州科技学院这个学校 URL”
 - “把叶老师设为当前老师”
 
 处理原则：
 
 - 缺老师名就问老师名
+- 缺学校 URL 时先问学校 URL
 - 缺学期时按用户原话推断；不确定再追问
 - 删除/覆盖账号前要确认
 - 查询结果优先直接整理成中文摘要返回
@@ -88,6 +92,10 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 
 当用户说“添加老师”“录入老师账号”“记住某老师账号密码”时：
 
+1. **若本地还没有学校 URL** → 先追问：
+   - “先把学校教务系统 URL 发我一下，比如 `https://jwgl.example.edu.cn`。”
+2. **若有多所学校且老师未明确属于哪所学校** → 追问：
+   - “这位老师属于哪所学校？我这边要绑定到对应的学校 URL。”
 1. **缺老师名** → 追问：
    - “要添加哪位老师？老师姓名是？”
 2. **缺账号** → 追问：
@@ -99,6 +107,25 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
    - “已经有这位老师的记录了。要覆盖更新吗？”
 6. **保存完成后** → 可补一句：
    - “要不要顺手把这位老师设为当前老师？”
+
+### 管理学校 URL
+
+当用户说“添加学校”“保存学校 URL”“修改学校地址”“删除学校 URL”“设为当前学校”时：
+
+1. **新增学校时缺学校名** → 追问：
+   - “这所学校叫什么名字？我本地会按学校名保存。”
+2. **新增学校时缺 URL** → 追问：
+   - “把这所学校的教务系统 URL 发我一下，比如 `https://jwgl.example.edu.cn`。”
+3. **只给学校 URL，没给登录页 URL** → 默认拼成 `{base_url}/jsxsd/framework/jsMain.jsp`，一般不额外追问
+4. **学校已存在** → 不直接覆盖，先确认：
+   - “已经有这所学校的 URL 记录了。要覆盖更新吗？”
+5. **删除学校 URL**
+   - 缺学校名就追问
+   - 若有老师绑定该学校，先明确提示影响，再确认删除
+6. **设置当前学校**
+   - 学校名明确就直接设置
+   - 学校名不明确就追问：
+     - “你要把哪所学校设为当前学校？”
 
 ### 删除老师账号信息
 
@@ -124,19 +151,26 @@ description: Query a university jwgl/教务系统 for teacher-facing academic-of
 
 当用户发起查询时：
 
-1. **缺老师名**
+1. **先确定学校**
+   - 如果老师已绑定学校，优先使用老师绑定的学校 URL
+   - 否则如果已有 `current_school`，优先使用当前学校
+   - 如果本地还没有学校 URL，先追问：
+     - “先把学校教务系统 URL 发我一下，我保存后就能继续查。”
+   - 如果本地保存了多所学校但当前请求无法确定是哪所，追问：
+     - “你这次要查哪所学校的教务系统？”
+2. **缺老师名**
    - 如果已有 `current_teacher`，优先默认使用当前老师，并可简短说明
    - 如果没有 `current_teacher`，追问：
      - “你要查哪位老师？”
-2. **缺学期**
+3. **缺学期**
    - 如果用户说“这周课表”“这学期安排”，优先按当前学期理解
    - 如果用户明确指定学期，直接按指定学期查
    - 如果需求涉及历史数据且不明确，再追问：
      - “你要查哪个学期？比如 `2025-2026-2`。”
-3. **老师账号不存在**
+4. **老师账号不存在**
    - 不直接甩 CLI 命令给用户，先用自然语言追问：
      - “还没有保存这位老师的账号信息。把登录账号和密码发我，我先录入，再帮你查。”
-4. **查到数据**
+5. **查到数据**
    - 优先返回中文摘要
    - 只有在调试或用户明确要求时再贴 JSON
 

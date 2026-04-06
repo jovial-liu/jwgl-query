@@ -1,18 +1,32 @@
 {
+  "current_school": "南理工泰州科技学院",
+  "schools": {
+    "南理工泰州科技学院": {
+      "base_url": "https://jwgl.nustti.edu.cn",
+      "login_url": "https://jwgl.nustti.edu.cn/jsxsd/framework/jsMain.jsp"
+    },
+    "另一所学校": {
+      "base_url": "https://jwgl.example.edu.cn",
+      "login_url": "https://jwgl.example.edu.cn/jsxsd/framework/jsMain.jsp"
+    }
+  },
   "base_url": "https://jwgl.nustti.edu.cn",
   "login_url": "https://jwgl.nustti.edu.cn/jsxsd/framework/jsMain.jsp",
   "teachers": {
     "某老师": {
       "username": "teacher_account",
-      "password": "REPLACE_ME"
+      "password": "REPLACE_ME",
+      "school": "南理工泰州科技学院"
     },
     "另一位老师": {
       "username": "another_teacher_account",
-      "password": "REPLACE_ME"
+      "password": "REPLACE_ME",
+      "school": "另一所学校"
     },
     "默认": {
       "username": "default_user",
-      "password": "REPLACE_ME"
+      "password": "REPLACE_ME",
+      "school": "南理工泰州科技学院"
     }
   },
   "selectors": {

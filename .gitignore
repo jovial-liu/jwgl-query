@@ -2,5 +2,15 @@
 __pycache__/
 *.pyc
 config.json
+config.local.json
+.env
+.env.*
 out/
+.clawhub/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vscode/
+.idea/
+*.log
 .DS_Store

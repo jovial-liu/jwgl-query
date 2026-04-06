@@ -5,11 +5,8 @@
 ## 功能
 
 - 查本周课表
-- 查监考安排
-- 查课程考试安排
-- 查考试信息
-- 聚合查询考试安排
-- 管理多位老师账号
+- 查考试相关信息（监考安排、课程考试安排、考试信息，支持聚合查询）
+- 管理多位老师账号与学校 URL
 
 ## 初始化
 
@@ -32,15 +29,19 @@
 - 在缺少 `config.json` 时从 `config.example.json` 复制一份
 - 运行环境检查
 
-## 配置账号
+## 配置学校与账号
 
 `config.json` 不应提交到 Git。
 
 用户首次使用时，由 agent 通过自然语言收集：
 
+- 学校名称
+- 学校教务系统 URL
 - 老师姓名
 - 登录账号
 - 登录密码
+
+如果用户没提供登录页 URL，默认按 `{学校 URL}/jsxsd/framework/jsMain.jsp` 生成。
 
 然后调用底层脚本写入本地 `config.json`。
 
@@ -50,10 +51,12 @@
 ./scripts/setup.sh
 ./scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
 python3 scripts/manage_accounts.py --config config.json list
+python3 scripts/manage_accounts.py --config config.json school-list
 ```
 
 ## 说明
 
 - 主交互入口是自然语言，不是 CLI
+- 如果还没有保存学校 URL，agent 应先追问学校教务系统 URL，再继续录入老师账号或执行查询
 - `tools/` 下脚本仅用于诊断
 - `out/` 为调试输出目录，不应提交到仓库

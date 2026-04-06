@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 MASK = "******"
+DEFAULT_LOGIN_PATH = "/jsxsd/framework/jsMain.jsp"
+LEGACY_SCHOOL_NAME = "默认学校"
 
 
 def print_json(payload: dict[str, Any], exit_code: int = 0) -> None:
@@ -15,15 +17,78 @@ def print_json(payload: dict[str, Any], exit_code: int = 0) -> None:
 
 
 def load_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+    bootstrap_legacy_school(config)
+    return config
 
 
 def save_config(path: Path, config: dict[str, Any]) -> None:
+    sync_legacy_urls(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
         f.write("\n")
+
+
+def normalize_url(url: str | None) -> str:
+    return (url or "").strip().rstrip("/")
+
+
+def derive_login_url(base_url: str) -> str:
+    cleaned = normalize_url(base_url)
+    if not cleaned:
+        return ""
+    return f"{cleaned}{DEFAULT_LOGIN_PATH}"
+
+
+def bootstrap_legacy_school(config: dict[str, Any]) -> None:
+    schools = config.get("schools")
+    if schools is not None and not isinstance(schools, dict):
+        print_json(
+            {
+                "ok": False,
+                "error_code": "INVALID_CONFIG",
+                "message": "config.json 中的 schools 必须是对象",
+            },
+            exit_code=2,
+        )
+    if schools:
+        return
+
+    base_url = normalize_url(config.get("base_url"))
+    login_url = normalize_url(config.get("login_url")) or derive_login_url(base_url)
+    if not base_url and not login_url:
+        config.setdefault("schools", {})
+        return
+
+    school_name = (config.get("current_school") or LEGACY_SCHOOL_NAME).strip() or LEGACY_SCHOOL_NAME
+    config["schools"] = {
+        school_name: {
+            "base_url": base_url,
+            "login_url": login_url,
+        }
+    }
+    config["current_school"] = school_name
+
+
+def sync_legacy_urls(config: dict[str, Any]) -> None:
+    schools = config.get("schools", {})
+    if not isinstance(schools, dict) or not schools:
+        config.pop("base_url", None)
+        config.pop("login_url", None)
+        return
+
+    current_school = (config.get("current_school") or "").strip()
+    if current_school not in schools:
+        current_school = next(iter(schools.keys()))
+        config["current_school"] = current_school
+
+    current = schools.get(current_school, {})
+    config["base_url"] = normalize_url(current.get("base_url"))
+    config["login_url"] = normalize_url(current.get("login_url")) or derive_login_url(config["base_url"])
 
 
 def ensure_teachers(config: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +103,21 @@ def ensure_teachers(config: dict[str, Any]) -> dict[str, Any]:
             exit_code=2,
         )
     return teachers
+
+
+def ensure_schools(config: dict[str, Any]) -> dict[str, Any]:
+    bootstrap_legacy_school(config)
+    schools = config.setdefault("schools", {})
+    if not isinstance(schools, dict):
+        print_json(
+            {
+                "ok": False,
+                "error_code": "INVALID_CONFIG",
+                "message": "config.json 中的 schools 必须是对象",
+            },
+            exit_code=2,
+        )
+    return schools
 
 
 def mask_teacher(teacher: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +148,30 @@ def normalize_teacher_fields(previous: dict[str, Any] | None = None, *, username
             exit_code=2,
         )
     return teacher
+
+
+def normalize_school_fields(previous: dict[str, Any] | None = None, *, base_url: str | None = None, login_url: str | None = None) -> dict[str, Any]:
+    school = dict(previous or {})
+    if base_url is not None:
+        school["base_url"] = normalize_url(base_url)
+    if login_url is not None:
+        school["login_url"] = normalize_url(login_url)
+
+    resolved_base_url = normalize_url(school.get("base_url"))
+    resolved_login_url = normalize_url(school.get("login_url")) or derive_login_url(resolved_base_url)
+    if not resolved_base_url:
+        print_json(
+            {
+                "ok": False,
+                "error_code": "MISSING_REQUIRED_FIELDS",
+                "message": "学校 URL 为空，无法保存",
+                "required": ["school", "base_url"],
+            },
+            exit_code=2,
+        )
+    school["base_url"] = resolved_base_url
+    school["login_url"] = resolved_login_url
+    return school
 
 
 def require_teacher_name(teacher: str | None, *, action: str) -> str:
@@ -101,16 +205,71 @@ def require_existing_teacher(teachers: dict[str, Any], teacher: str, *, action: 
     return teachers[teacher]
 
 
+def require_school_name(school: str | None, *, action: str) -> str:
+    name = (school or "").strip()
+    if not name:
+        print_json(
+            {
+                "ok": False,
+                "error_code": "MISSING_SCHOOL_NAME",
+                "message": f"缺少学校名称，无法执行{action}",
+                "required": ["school"],
+                "action": action,
+            },
+            exit_code=2,
+        )
+    return name
+
+
+def require_existing_school(schools: dict[str, Any], school: str, *, action: str) -> dict[str, Any]:
+    if school not in schools:
+        print_json(
+            {
+                "ok": False,
+                "error_code": "SCHOOL_NOT_FOUND",
+                "message": f"学校 {school} 不存在，无法执行{action}",
+                "school": school,
+                "action": action,
+            },
+            exit_code=3,
+        )
+    return schools[school]
+
+
+def resolve_teacher_school(config: dict[str, Any], school: str | None, *, previous: dict[str, Any] | None = None) -> str:
+    schools = ensure_schools(config)
+    explicit_school = (school or "").strip()
+    if explicit_school:
+        require_existing_school(schools, explicit_school, action="bind-teacher-school")
+        return explicit_school
+
+    previous_school = (previous or {}).get("school", "").strip()
+    if previous_school:
+        require_existing_school(schools, previous_school, action="bind-teacher-school")
+        return previous_school
+
+    current_school = (config.get("current_school") or "").strip()
+    if current_school:
+        require_existing_school(schools, current_school, action="bind-teacher-school")
+        return current_school
+
+    return ""
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     config = load_config(Path(args.config))
     teachers = ensure_teachers(config)
+    schools = ensure_schools(config)
     print_json(
         {
             "ok": True,
             "action": "list",
             "current_teacher": config.get("current_teacher"),
+            "current_school": config.get("current_school"),
             "count": len(teachers),
+            "school_count": len(schools),
             "teachers": {name: mask_teacher(info if isinstance(info, dict) else {}) for name, info in teachers.items()},
+            "schools": schools,
         }
     )
 
@@ -132,17 +291,21 @@ def cmd_add(args: argparse.Namespace) -> None:
             },
             exit_code=3,
         )
-    teachers[teacher_name] = normalize_teacher_fields(
+    school_name = resolve_teacher_school(config, args.school, previous=previous)
+    teacher = normalize_teacher_fields(
         previous,
         username=args.username,
         password=args.password,
         email=args.email if args.email is not None else (previous or {}).get("email", ""),
         phone=args.phone if args.phone is not None else (previous or {}).get("phone", ""),
     )
+    if school_name:
+        teacher["school"] = school_name
+    teachers[teacher_name] = teacher
     if args.set_current or not config.get("current_teacher"):
         config["current_teacher"] = teacher_name
     save_config(path, config)
-    print_json({"ok": True, "action": "add", "teacher": teacher_name, "set_current": config.get("current_teacher") == teacher_name})
+    print_json({"ok": True, "action": "add", "teacher": teacher_name, "school": school_name, "set_current": config.get("current_teacher") == teacher_name})
 
 
 def cmd_update(args: argparse.Namespace) -> None:
@@ -151,17 +314,23 @@ def cmd_update(args: argparse.Namespace) -> None:
     teachers = ensure_teachers(config)
     teacher_name = require_teacher_name(args.teacher, action="update")
     previous = require_existing_teacher(teachers, teacher_name, action="update")
-    teachers[teacher_name] = normalize_teacher_fields(
+    school_name = resolve_teacher_school(config, args.school, previous=previous)
+    teacher = normalize_teacher_fields(
         previous,
         username=args.username if args.username is not None else previous.get("username"),
         password=args.password if args.password is not None else previous.get("password"),
         email=args.email if args.email is not None else previous.get("email", ""),
         phone=args.phone if args.phone is not None else previous.get("phone", ""),
     )
+    if school_name:
+        teacher["school"] = school_name
+    else:
+        teacher.pop("school", None)
+    teachers[teacher_name] = teacher
     if args.set_current:
         config["current_teacher"] = teacher_name
     save_config(path, config)
-    print_json({"ok": True, "action": "update", "teacher": teacher_name, "set_current": config.get("current_teacher") == teacher_name})
+    print_json({"ok": True, "action": "update", "teacher": teacher_name, "school": school_name, "set_current": config.get("current_teacher") == teacher_name})
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
@@ -188,8 +357,116 @@ def cmd_set_current(args: argparse.Namespace) -> None:
     print_json({"ok": True, "action": "set_current", "teacher": teacher_name})
 
 
+def cmd_school_list(args: argparse.Namespace) -> None:
+    config = load_config(Path(args.config))
+    schools = ensure_schools(config)
+    print_json(
+        {
+            "ok": True,
+            "action": "school_list",
+            "current_school": config.get("current_school"),
+            "count": len(schools),
+            "schools": schools,
+        }
+    )
+
+
+def cmd_school_add(args: argparse.Namespace) -> None:
+    path = Path(args.config)
+    config = load_config(path)
+    schools = ensure_schools(config)
+    school_name = require_school_name(args.school, action="school-add")
+    previous = schools.get(school_name)
+    if previous and not args.force:
+        print_json(
+            {
+                "ok": False,
+                "error_code": "SCHOOL_ALREADY_EXISTS",
+                "message": f"学校 {school_name} 已存在",
+                "school": school_name,
+                "action": "school-add",
+            },
+            exit_code=3,
+        )
+    schools[school_name] = normalize_school_fields(previous, base_url=args.base_url, login_url=args.login_url)
+    if args.set_current or not config.get("current_school"):
+        config["current_school"] = school_name
+    save_config(path, config)
+    print_json({"ok": True, "action": "school_add", "school": school_name, "set_current": config.get("current_school") == school_name})
+
+
+def cmd_school_update(args: argparse.Namespace) -> None:
+    path = Path(args.config)
+    config = load_config(path)
+    schools = ensure_schools(config)
+    school_name = require_school_name(args.school, action="school-update")
+    previous = require_existing_school(schools, school_name, action="school-update")
+    schools[school_name] = normalize_school_fields(
+        previous,
+        base_url=args.base_url if args.base_url is not None else previous.get("base_url"),
+        login_url=args.login_url if args.login_url is not None else previous.get("login_url"),
+    )
+    if args.set_current:
+        config["current_school"] = school_name
+    save_config(path, config)
+    print_json({"ok": True, "action": "school_update", "school": school_name, "set_current": config.get("current_school") == school_name})
+
+
+def cmd_school_remove(args: argparse.Namespace) -> None:
+    path = Path(args.config)
+    config = load_config(path)
+    schools = ensure_schools(config)
+    teachers = ensure_teachers(config)
+    school_name = require_school_name(args.school, action="school-remove")
+    require_existing_school(schools, school_name, action="school-remove")
+
+    linked_teachers = sorted(name for name, info in teachers.items() if isinstance(info, dict) and info.get("school") == school_name)
+    if linked_teachers and not args.force:
+        print_json(
+            {
+                "ok": False,
+                "error_code": "SCHOOL_IN_USE",
+                "message": f"学校 {school_name} 仍被老师账号引用，无法删除",
+                "school": school_name,
+                "teachers": linked_teachers,
+                "action": "school-remove",
+            },
+            exit_code=3,
+        )
+
+    del schools[school_name]
+    for teacher_name in linked_teachers:
+        if isinstance(teachers.get(teacher_name), dict):
+            teachers[teacher_name].pop("school", None)
+
+    if config.get("current_school") == school_name:
+        config["current_school"] = next(iter(schools.keys()), "")
+
+    save_config(path, config)
+    print_json(
+        {
+            "ok": True,
+            "action": "school_remove",
+            "school": school_name,
+            "current_school": config.get("current_school", ""),
+            "detached_teachers": linked_teachers,
+        }
+    )
+
+
+def cmd_school_set_current(args: argparse.Namespace) -> None:
+    path = Path(args.config)
+    config = load_config(path)
+    schools = ensure_schools(config)
+    school_name = require_school_name(args.school, action="school-set-current")
+    require_existing_school(schools, school_name, action="school-set-current")
+    config["current_school"] = school_name
+    save_config(path, config)
+    print_json({"ok": True, "action": "school_set_current", "school": school_name})
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="管理 jwgl-query 的老师账号配置（执行接口）")
+    parser = argparse.ArgumentParser(description="管理 jwgl-query 的老师账号与学校 URL 配置（执行接口）")
     parser.add_argument("--config", default="config.json")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -202,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--password", help="登录密码")
         p.add_argument("--email", help="邮箱（可选）")
         p.add_argument("--phone", help="手机号（可选）")
+        p.add_argument("--school", help="所属学校名称（可选；默认沿用当前学校）")
         p.add_argument("--set-current", action="store_true", help="保存后设为当前老师")
 
     p_add = subparsers.add_parser("add", help="新增老师账号")
@@ -220,6 +498,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_set = subparsers.add_parser("set-current", help="设置当前老师")
     p_set.add_argument("--teacher", required=False, help="老师名称")
     p_set.set_defaults(func=cmd_set_current)
+
+    def add_school_fields(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--school", required=False, help="学校名称")
+        p.add_argument("--base-url", help="学校教务系统基础 URL，例如 https://jwgl.example.edu.cn")
+        p.add_argument("--login-url", help="登录页 URL；不传时默认使用 /jsxsd/framework/jsMain.jsp")
+        p.add_argument("--set-current", action="store_true", help="保存后设为当前学校")
+
+    p_school_list = subparsers.add_parser("school-list", help="列出已保存的学校 URL")
+    p_school_list.set_defaults(func=cmd_school_list)
+
+    p_school_add = subparsers.add_parser("school-add", help="新增学校 URL")
+    add_school_fields(p_school_add)
+    p_school_add.add_argument("--force", action="store_true", help="学校已存在时允许覆盖")
+    p_school_add.set_defaults(func=cmd_school_add)
+
+    p_school_update = subparsers.add_parser("school-update", help="更新学校 URL")
+    add_school_fields(p_school_update)
+    p_school_update.set_defaults(func=cmd_school_update)
+
+    p_school_remove = subparsers.add_parser("school-remove", help="删除学校 URL")
+    p_school_remove.add_argument("--school", required=False, help="学校名称")
+    p_school_remove.add_argument("--force", action="store_true", help="若有老师绑定该学校，则解绑后继续删除")
+    p_school_remove.set_defaults(func=cmd_school_remove)
+
+    p_school_set = subparsers.add_parser("school-set-current", help="设置当前学校")
+    p_school_set.add_argument("--school", required=False, help="学校名称")
+    p_school_set.set_defaults(func=cmd_school_set_current)
 
     return parser
 

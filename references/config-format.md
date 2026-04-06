@@ -4,16 +4,22 @@
 
 Create a local `config.json` in the skill root.
 
-The structure is split into teacher credentials, login selectors, and per-query selectors. When the user provides a new teacher account/password, save it into the local `teachers` map for reuse.
+The structure is split into school URLs, teacher credentials, login selectors, and per-query selectors. When the user provides a new school URL or teacher account/password, save it into the local config for reuse.
 
 ```json
 {
-  "base_url": "https://jwgl.nustti.edu.cn",
-  "login_url": "https://jwgl.nustti.edu.cn/jsxsd/framework/jsMain.jsp",
+  "current_school": "某学校",
+  "schools": {
+    "某学校": {
+      "base_url": "https://jwgl.example.edu.cn",
+      "login_url": "https://jwgl.example.edu.cn/jsxsd/framework/jsMain.jsp"
+    }
+  },
   "teachers": {
     "某老师": {
       "username": "teacher_account",
-      "password": "REPLACE_ME"
+      "password": "REPLACE_ME",
+      "school": "某学校"
     }
   },
   "selectors": {
@@ -45,6 +51,13 @@ The structure is split into teacher credentials, login selectors, and per-query 
   }
 }
 ```
+
+Notes:
+
+- New configs should use the `schools` map plus `current_school`.
+- `teacher.school` is optional but recommended when you manage multiple schools.
+- If the user only provides a school base URL, derive `login_url` as `{base_url}/jsxsd/framework/jsMain.jsp`.
+- Legacy root-level `base_url` and `login_url` are still tolerated for backward compatibility, but new writes should treat school URLs as named entries.
 
 ## Selector object format
 
