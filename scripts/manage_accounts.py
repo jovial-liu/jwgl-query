@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 MASK = "******"
 DEFAULT_LOGIN_PATH = "/jsxsd/framework/jsMain.jsp"
 LEGACY_SCHOOL_NAME = "默认学校"
+CONFIG_EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "config.example.json"
 
 
 def print_json(payload: dict[str, Any], exit_code: int = 0) -> None:
@@ -22,10 +24,12 @@ def load_config(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         config = json.load(f)
     bootstrap_legacy_school(config)
+    apply_runtime_defaults(config)
     return config
 
 
 def save_config(path: Path, config: dict[str, Any]) -> None:
+    apply_runtime_defaults(config)
     sync_legacy_urls(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -72,6 +76,34 @@ def bootstrap_legacy_school(config: dict[str, Any]) -> None:
         }
     }
     config["current_school"] = school_name
+
+
+def load_default_runtime_config() -> dict[str, Any]:
+    if not CONFIG_EXAMPLE_PATH.exists():
+        return {}
+    with CONFIG_EXAMPLE_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def merge_missing_dict_values(current: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(current)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_missing_dict_values(current_value, default_value)
+        elif key not in merged:
+            merged[key] = deepcopy(default_value)
+    return merged
+
+
+def apply_runtime_defaults(config: dict[str, Any]) -> None:
+    defaults = load_default_runtime_config()
+    selector_defaults = defaults.get("selectors")
+    if isinstance(selector_defaults, dict):
+        current_selectors = config.get("selectors")
+        if not isinstance(current_selectors, dict):
+            current_selectors = {}
+        config["selectors"] = merge_missing_dict_values(current_selectors, selector_defaults)
 
 
 def sync_legacy_urls(config: dict[str, Any]) -> None:

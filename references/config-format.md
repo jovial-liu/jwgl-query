@@ -57,6 +57,7 @@ Notes:
 - New configs should use the `schools` map plus `current_school`.
 - `teacher.school` is optional but recommended when you manage multiple schools.
 - If the user only provides a school base URL, derive `login_url` as `{base_url}/jsxsd/framework/jsMain.jsp`.
+- When `config.json` is written or loaded, missing `selectors` / `selectors.queries.*` should be merged from `config.example.json` so the runtime config stays directly usable.
 - Legacy root-level `base_url` and `login_url` are still tolerated for backward compatibility, but new writes should treat school URLs as named entries.
 
 ## Selector object format

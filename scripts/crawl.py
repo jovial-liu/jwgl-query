@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import csv
 import json
 import os
@@ -34,6 +35,7 @@ DEFAULT_COLS = [
 ]
 DEFAULT_LOGIN_PATH = "/jsxsd/framework/jsMain.jsp"
 LEGACY_SCHOOL_NAME = "默认学校"
+CONFIG_EXAMPLE_PATH = SCRIPT_DIR.parent / "config.example.json"
 
 COURSE_SCHEDULE_COLS = [
     "星期",
@@ -59,6 +61,7 @@ def load_config(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         config = json.load(f)
     bootstrap_legacy_school(config)
+    apply_runtime_defaults(config)
     return config
 
 
@@ -97,6 +100,34 @@ def bootstrap_legacy_school(config: dict[str, Any]) -> None:
         }
     }
     config["current_school"] = school_name
+
+
+def load_default_runtime_config() -> dict[str, Any]:
+    if not CONFIG_EXAMPLE_PATH.exists():
+        return {}
+    with CONFIG_EXAMPLE_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def merge_missing_dict_values(current: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(current)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_missing_dict_values(current_value, default_value)
+        elif key not in merged:
+            merged[key] = deepcopy(default_value)
+    return merged
+
+
+def apply_runtime_defaults(config: dict[str, Any]) -> None:
+    defaults = load_default_runtime_config()
+    selector_defaults = defaults.get("selectors")
+    if isinstance(selector_defaults, dict):
+        current_selectors = config.get("selectors")
+        if not isinstance(current_selectors, dict):
+            current_selectors = {}
+        config["selectors"] = merge_missing_dict_values(current_selectors, selector_defaults)
 
 
 def get_school_map(config: dict[str, Any]) -> dict[str, Any]:
@@ -177,6 +208,47 @@ def resolve_school_config(config: dict[str, Any], teacher_name: str, teacher: di
         "message": "已保存多个学校 URL，请先指定要使用的学校",
         "schools": sorted(schools.keys()),
     }, ensure_ascii=False))
+
+
+def require_query_config(config: dict[str, Any], query_type: str, school_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    selectors = config.get("selectors")
+    if not isinstance(selectors, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_SELECTORS_CONFIG",
+            "school": school_name,
+            "message": "config.json 缺少 selectors 配置",
+            "required": ["selectors.login", f"selectors.queries.{query_type}"],
+        }, ensure_ascii=False))
+
+    login = selectors.get("login")
+    if not isinstance(login, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_LOGIN_SELECTORS",
+            "school": school_name,
+            "message": "config.json 缺少 selectors.login 配置",
+            "required": ["selectors.login.username", "selectors.login.password", "selectors.login.login_button"],
+        }, ensure_ascii=False))
+
+    queries = selectors.get("queries")
+    if not isinstance(queries, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_QUERY_DEFINITIONS",
+            "school": school_name,
+            "message": "config.json 缺少 selectors.queries 配置",
+            "required": [f"selectors.queries.{query_type}"],
+        }, ensure_ascii=False))
+
+    query = queries.get(query_type)
+    if not isinstance(query, dict):
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_QUERY_CONFIG",
+            "school": school_name,
+            "query_type": query_type,
+            "message": f"config.json 缺少 selectors.queries.{query_type} 配置",
+            "required": [f"selectors.queries.{query_type}"],
+        }, ensure_ascii=False))
+
+    return login, query
 
 
 def build_driver(chromedriver_path: str | None = None, headless: bool = False):
@@ -378,6 +450,43 @@ def parse_course_cell(cell) -> list[dict[str, str]]:
     return candidates
 
 
+def normalize_course_row_value(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def course_row_key(row: dict[str, str]) -> tuple[str, ...]:
+    return tuple(
+        normalize_course_row_value(row.get(field))
+        for field in ("星期", "节次", "时间", "课程名称", "周次", "教室")
+    )
+
+
+def course_row_score(row: dict[str, str]) -> tuple[int, int, int]:
+    priority_fields = ("班级", "人数", "附加信息", "教室", "周次", "时间")
+    normalized_values = [normalize_course_row_value(str(value)) for value in row.values()]
+    return (
+        sum(bool(normalize_course_row_value(row.get(field))) for field in priority_fields),
+        sum(bool(value) for value in normalized_values),
+        sum(len(value) for value in normalized_values),
+    )
+
+
+def dedupe_course_schedule_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    best_by_key: dict[tuple[str, ...], dict[str, str]] = {}
+    order: list[tuple[str, ...]] = []
+
+    for row in rows:
+        key = course_row_key(row)
+        if key not in best_by_key:
+            best_by_key[key] = row
+            order.append(key)
+            continue
+        if course_row_score(row) > course_row_score(best_by_key[key]):
+            best_by_key[key] = row
+
+    return [best_by_key[key] for key in order]
+
+
 def parse_teacher_schedule_html(html: str) -> list[dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", id="kbtable")
@@ -410,7 +519,7 @@ def parse_teacher_schedule_html(html: str) -> list[dict[str, str]]:
                     **entry,
                 }
             )
-    return rows
+    return dedupe_course_schedule_rows(rows)
 
 
 def parse_course_schedule_html(html: str) -> list[dict[str, str]]:
@@ -451,7 +560,7 @@ def parse_course_schedule_html(html: str) -> list[dict[str, str]]:
                         **entry,
                     }
                 )
-    return rows
+    return dedupe_course_schedule_rows(rows)
 
 
 def login_once(driver, login_url: str, login: dict[str, Any], creds: dict[str, Any], save_step=None, wait: int = 30):
@@ -508,12 +617,17 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
     teacher = ensure_teacher_record(config, teacher_name)
     school_name, school = resolve_school_config(config, teacher_name, teacher)
 
-    login = config.get("selectors", {}).get("login", {})
-    query = config.get("selectors", {}).get("queries", {}).get(query_type)
+    login, query = require_query_config(config, query_type, school_name)
     login_url = normalize_url(school.get("login_url")) or derive_login_url(school.get("base_url"))
     base_url = normalize_url(school.get("base_url")) or normalize_url(login_url)
-    if not login_url or not query:
-        raise SystemExit(f"Missing login_url or query config for {query_type}")
+    if not login_url:
+        raise RuntimeError(json.dumps({
+            "error_code": "MISSING_LOGIN_URL",
+            "school": school_name,
+            "query_type": query_type,
+            "message": "config.json 缺少学校登录 URL 配置",
+            "required": ["schools.<school>.login_url"],
+        }, ensure_ascii=False))
 
     active_config = dict(config)
     active_config["base_url"] = base_url
