@@ -21,7 +21,7 @@ if [ ! -f "$BASE_DIR/config.json" ]; then
 fi
 
 if [ "$needs_setup" -eq 1 ]; then
-  "$SETUP_SCRIPT"
+  bash "$SETUP_SCRIPT"
 fi
 
 echo "env_ready"

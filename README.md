@@ -13,13 +13,13 @@
 可手动初始化：
 
 ```bash
-./scripts/setup.sh
+bash scripts/setup.sh
 ```
 
 也可以直接运行查询脚本；首次运行时会自动完成初始化：
 
 ```bash
-./scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
 ```
 
 初始化会自动：
@@ -48,8 +48,8 @@
 ## 常用脚本
 
 ```bash
-./scripts/setup.sh
-./scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
+bash scripts/setup.sh
+bash scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
 python3 scripts/manage_accounts.py --config config.json list
 python3 scripts/manage_accounts.py --config config.json school-list
 ```
@@ -58,5 +58,6 @@ python3 scripts/manage_accounts.py --config config.json school-list
 
 - 主交互入口是自然语言，不是 CLI
 - 如果还没有保存学校 URL，agent 应先追问学校教务系统 URL，再继续录入老师账号或执行查询
+- 调 shell 脚本时优先使用 `bash scripts/...`，不要假设安装后的 skill 目录保留了可执行位
 - `tools/` 下脚本仅用于诊断
 - `out/` 为调试输出目录，不应提交到仓库

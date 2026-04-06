@@ -283,14 +283,14 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 
 ```bash
 # 可手动初始化环境（首次拉取后）
-./scripts/setup.sh
+bash scripts/setup.sh
 
 # 查询执行（首次运行会自动补环境）
-./scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_all --headless
-./scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type invigilation --headless
-./scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_course_arrangement --headless
-./scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_info --headless
-./scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_all --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type invigilation --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_course_arrangement --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --term "2025-2026-2" --query-type exam_info --headless
+bash scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
 
 # 账号管理执行接口
 python3 scripts/manage_accounts.py --config config.json list
@@ -299,6 +299,8 @@ python3 scripts/manage_accounts.py --config config.json update --teacher "某老
 python3 scripts/manage_accounts.py --config config.json remove --teacher "某老师"
 python3 scripts/manage_accounts.py --config config.json set-current --teacher "某老师"
 ```
+
+不要假设 `scripts/*.sh` 在安装后的 skill 目录里保留了可执行位。执行底层 shell 脚本时，优先使用 `bash scripts/...`。
 
 调试探测脚本已放到 `tools/`，仅在诊断页面结构时使用，不作为主流程入口。
 
