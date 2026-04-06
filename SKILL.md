@@ -16,13 +16,13 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 
 也就是说，用户应该直接说：
 
-- 查叶老师这周课表
+- 查某老师这周课表
 - 查考试安排
-- 添加学校，学校叫南理工泰州科技学院，地址是 https://jwgl.nustti.edu.cn
-- 添加叶老师账号
-- 删除叶老师信息
+- 添加学校，学校叫某学校，地址是 https://jwgl.example.edu.cn
+- 添加某老师账号
+- 删除某老师信息
 - 删除某学校 URL
-- 把叶老师设为当前老师
+- 把某老师设为当前老师
 
 然后由 agent：
 
@@ -67,15 +67,15 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 
 优先按下面这种方式理解并处理用户请求：
 
-- “查叶老师这周课表”
-- “查叶老师 2025-2026-2 的监考安排”
+- “查某老师这周课表”
+- “查某老师 2025-2026-2 的监考安排”
 - “查考试安排”
-- “添加学校，学校叫南理工泰州科技学院，地址是 https://jwgl.nustti.edu.cn”
-- “把南理工泰州科技学院设为当前学校”
-- “添加叶老师账号，账号是 xxx，密码是 xxx”
-- “删除叶老师信息”
-- “删除南理工泰州科技学院这个学校 URL”
-- “把叶老师设为当前老师”
+- “添加学校，学校叫某学校，地址是 https://jwgl.example.edu.cn”
+- “把某学校设为当前学校”
+- “添加某老师账号，账号是 xxx，密码是 xxx”
+- “删除某老师信息”
+- “删除某学校这个学校 URL”
+- “把某老师设为当前老师”
 
 处理原则：
 
@@ -119,7 +119,10 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 3. **只给学校 URL，没给登录页 URL** → 默认拼成 `{base_url}/jsxsd/framework/jsMain.jsp`，一般不额外追问
 4. **学校已存在** → 不直接覆盖，先确认：
    - “已经有这所学校的 URL 记录了。要覆盖更新吗？”
-5. **删除学校 URL**
+5. **脚本参数兼容**
+   - 学校名允许 `--school` 或旧写法 `--name`
+   - 老师名允许 `--teacher` 或旧写法 `--name`
+6. **删除学校 URL**
    - 缺学校名就追问
    - 若有老师绑定该学校，先明确提示影响，再确认删除
 6. **设置当前学校**
@@ -221,17 +224,17 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 当查到课表时：
 
 - 先给一句结论：
-  - “查到了，叶老师这周课表如下：”
+  - “查到了，某老师这周课表如下：”
 - 再按星期顺序列出
 - 每条尽量包含：星期、节次、时间、课程名、教室；班级/人数视情况附上
 
 推荐格式：
 
 - 星期一 1,2节 `08:00-09:40`
-  - 数据可视化技术
-  - 教室：敏行楼B305[01-02]节
-  - 班级：23信管班
-  - 人数：46
+  - 某课程
+  - 教室：某教学楼A101[01-02]节
+  - 班级：某班级
+  - 人数：40
 
 如果用户问“今天还有什么课”或“明天课表”，优先只返回对应日期的子集，不把整周都贴出来。
 
@@ -253,7 +256,7 @@ description: Query a university jwgl/教务系统 for teacher-facing data such a
 
 - “没查到数据。”
 - 或更具体：
-  - “没查到叶老师这周的课表。”
+  - “没查到某老师这周的课表。”
   - “没查到这个学期的监考安排。”
 
 如果条件可能有问题，可追加：
@@ -298,7 +301,19 @@ python3 scripts/manage_accounts.py --config config.json add --teacher "某老师
 python3 scripts/manage_accounts.py --config config.json update --teacher "某老师" --password "新密码"
 python3 scripts/manage_accounts.py --config config.json remove --teacher "某老师"
 python3 scripts/manage_accounts.py --config config.json set-current --teacher "某老师"
+python3 scripts/manage_accounts.py --config config.json school-list
+python3 scripts/manage_accounts.py --config config.json school-add --school "某学校" --base-url "https://jwgl.example.edu.cn" --set-current
+python3 scripts/manage_accounts.py --config config.json school-update --school "某学校" --base-url "https://jwgl.example.edu.cn"
+python3 scripts/manage_accounts.py --config config.json school-remove --school "某学校"
+python3 scripts/manage_accounts.py --config config.json school-set-current --school "某学校"
 ```
+
+兼容旧写法（为了减少踩坑）：
+
+- 学校名：`--school` / `--name`
+- 老师名：`--teacher` / `--name`
+- 登录账号：`--username` / `--user` / `--account`
+- 登录密码：`--password` / `--pass`
 
 不要假设 `scripts/*.sh` 在安装后的 skill 目录里保留了可执行位。执行底层 shell 脚本时，优先使用 `bash scripts/...`。
 
@@ -319,10 +334,10 @@ python3 scripts/manage_accounts.py --config config.json set-current --teacher "�
 
 账号管理的对外入口应是自然语言，例如：
 
-- “添加叶老师，账号是 xxx，密码是 xxx”
-- “删除叶老师信息”
-- “把叶老师设为当前老师”
-- “更新叶老师账号密码”
+- “添加某老师，账号是 xxx，密码是 xxx”
+- “删除某老师信息”
+- “把某老师设为当前老师”
+- “更新某老师账号密码”
 
 agent 负责：
 

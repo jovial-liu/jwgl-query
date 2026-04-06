@@ -14,17 +14,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup
-
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service as ChromeService
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.support.ui import Select, WebDriverWait
-    from selenium.webdriver.common.selenium_manager import SeleniumManager
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("Missing dependencies. Install selenium and beautifulsoup4 before running.") from exc
+BeautifulSoup = None
+webdriver = None
+ChromeService = None
+By = None
+EC = None
+Select = None
+WebDriverWait = None
+SeleniumManager = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -49,12 +46,40 @@ COURSE_SCHEDULE_COLS = [
     "附加信息",
 ]
 
-BY_MAP = {
-    "id": By.ID,
-    "xpath": By.XPATH,
-    "css": By.CSS_SELECTOR,
-    "name": By.NAME,
-}
+def ensure_runtime_dependencies() -> None:
+    global BeautifulSoup, webdriver, ChromeService, By, EC, Select, WebDriverWait, SeleniumManager
+    if all(dep is not None for dep in (BeautifulSoup, webdriver, ChromeService, By, EC, Select, WebDriverWait, SeleniumManager)):
+        return
+
+    try:
+        from bs4 import BeautifulSoup as _BeautifulSoup
+        from selenium import webdriver as _webdriver
+        from selenium.webdriver.chrome.service import Service as _ChromeService
+        from selenium.webdriver.common.by import By as _By
+        from selenium.webdriver.support import expected_conditions as _EC
+        from selenium.webdriver.support.ui import Select as _Select, WebDriverWait as _WebDriverWait
+        from selenium.webdriver.common.selenium_manager import SeleniumManager as _SeleniumManager
+    except ImportError as exc:  # pragma: no cover
+        raise SystemExit("Missing dependencies. Install selenium and beautifulsoup4 before running.") from exc
+
+    BeautifulSoup = _BeautifulSoup
+    webdriver = _webdriver
+    ChromeService = _ChromeService
+    By = _By
+    EC = _EC
+    Select = _Select
+    WebDriverWait = _WebDriverWait
+    SeleniumManager = _SeleniumManager
+
+
+def by_map() -> dict[str, str]:
+    ensure_runtime_dependencies()
+    return {
+        "id": By.ID,
+        "xpath": By.XPATH,
+        "css": By.CSS_SELECTOR,
+        "name": By.NAME,
+    }
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -252,6 +277,7 @@ def require_query_config(config: dict[str, Any], query_type: str, school_name: s
 
 
 def build_driver(chromedriver_path: str | None = None, headless: bool = False):
+    ensure_runtime_dependencies()
     chromedriver_path = chromedriver_path or os.getenv("CHROMEDRIVER_PATH")
     options = webdriver.ChromeOptions()
     options.add_argument("--disable-gpu")
@@ -304,19 +330,21 @@ def is_login_page(driver) -> bool:
 
 
 def locate(driver, selector: dict[str, str], wait: int = 15, clickable: bool = False):
+    ensure_runtime_dependencies()
     if not selector or not selector.get("value"):
         raise ValueError("Missing selector value in config")
-    by = BY_MAP[selector["by"]]
+    by = by_map()[selector["by"]]
     value = selector["value"]
     condition = EC.element_to_be_clickable((by, value)) if clickable else EC.presence_of_element_located((by, value))
     return WebDriverWait(driver, wait, poll_frequency=0.5).until(condition)
 
 
 def has_selector(driver, selector: dict[str, str]) -> bool:
+    ensure_runtime_dependencies()
     if not selector or not selector.get("value"):
         return False
     try:
-        by = BY_MAP[selector["by"]]
+        by = by_map()[selector["by"]]
         return bool(driver.find_elements(by, selector["value"]))
     except Exception:
         return False
@@ -333,15 +361,17 @@ def click(driver, selector: dict[str, str], wait: int = 15, js_fallback: bool = 
 
 
 def switch_to_frame(driver, selector: dict[str, str], wait: int = 15):
+    ensure_runtime_dependencies()
     if not selector or not selector.get("value"):
         raise ValueError("Missing selector value in config")
-    by = BY_MAP[selector["by"]]
+    by = by_map()[selector["by"]]
     value = selector["value"]
     WebDriverWait(driver, wait, poll_frequency=0.5).until(EC.frame_to_be_available_and_switch_to_it((by, value)))
     wait_for_ready(driver, wait=wait)
 
 
 def switch_to_visible_content_frame(driver, wait: int = 20):
+    ensure_runtime_dependencies()
     def _find_visible_frame(d):
         frames = d.find_elements(By.CSS_SELECTOR, "iframe[id^='Frame']")
         for frame in frames:
@@ -796,15 +826,15 @@ def run_crawler(config_path: str, teacher_name: str, term: str, query_type: str,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.json")
-    parser.add_argument("--teacher", default="默认")
-    parser.add_argument("--term", default="")
-    parser.add_argument("--query-type", default="invigilation")
-    parser.add_argument("--out", default="")
-    parser.add_argument("--format", choices=["csv", "json"], default="json")
-    parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--debug-dir", default="")
+    parser = argparse.ArgumentParser(description="查询 jwgl 教务系统中的教师课表与考试相关信息")
+    parser.add_argument("--config", default="config.json", help="配置文件路径")
+    parser.add_argument("--teacher", default="", help="老师名称；不传时优先尝试使用 config.json 中的 current_teacher")
+    parser.add_argument("--term", default="", help="学期，如 2025-2026-2；留空时按系统默认/当前学期处理")
+    parser.add_argument("--query-type", default="invigilation", help="查询类型：course_schedule / invigilation / exam_course_arrangement / exam_info / exam_all")
+    parser.add_argument("--out", default="", help="输出文件路径；不传则直接打印到 stdout")
+    parser.add_argument("--format", choices=["csv", "json"], default="json", help="输出格式")
+    parser.add_argument("--headless", action="store_true", help="使用无头浏览器运行")
+    parser.add_argument("--debug-dir", default="", help="调试输出目录；仅排障时使用")
     args = parser.parse_args()
 
     if args.query_type == "exam_all":

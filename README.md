@@ -52,7 +52,16 @@ bash scripts/setup.sh
 bash scripts/run.sh --config config.json --teacher "某老师" --query-type course_schedule --headless
 python3 scripts/manage_accounts.py --config config.json list
 python3 scripts/manage_accounts.py --config config.json school-list
+python3 scripts/manage_accounts.py --config config.json add --teacher "某老师" --username "账号" --password "密码" --set-current
+python3 scripts/manage_accounts.py --config config.json school-add --school "某学校" --base-url "https://jwgl.example.edu.cn" --set-current
 ```
+
+兼容旧写法：
+
+- 学校名：`--school` / `--name`
+- 老师名：`--teacher` / `--name`
+- 登录账号：`--username` / `--user` / `--account`
+- 登录密码：`--password` / `--pass`
 
 ## 说明
 

@@ -506,9 +506,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.set_defaults(func=cmd_list)
 
     def add_common_fields(p: argparse.ArgumentParser, require_teacher: bool = False) -> None:
-        p.add_argument("--teacher", required=require_teacher, help="老师名称")
-        p.add_argument("--username", help="登录账号")
-        p.add_argument("--password", help="登录密码")
+        p.add_argument("--teacher", "--name", dest="teacher", required=require_teacher, help="老师名称（兼容旧写法：--name）")
+        p.add_argument("--username", "--user", "--account", dest="username", help="登录账号（兼容旧写法：--user/--account）")
+        p.add_argument("--password", "--pass", dest="password", help="登录密码（兼容旧写法：--pass）")
         p.add_argument("--email", help="邮箱（可选）")
         p.add_argument("--phone", help="手机号（可选）")
         p.add_argument("--school", help="所属学校名称（可选；默认沿用当前学校）")
@@ -524,15 +524,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_update.set_defaults(func=cmd_update)
 
     p_remove = subparsers.add_parser("remove", help="删除老师账号")
-    p_remove.add_argument("--teacher", required=False, help="老师名称")
+    p_remove.add_argument("--teacher", "--name", dest="teacher", required=False, help="老师名称（兼容旧写法：--name）")
     p_remove.set_defaults(func=cmd_remove)
 
     p_set = subparsers.add_parser("set-current", help="设置当前老师")
-    p_set.add_argument("--teacher", required=False, help="老师名称")
+    p_set.add_argument("--teacher", "--name", dest="teacher", required=False, help="老师名称（兼容旧写法：--name）")
     p_set.set_defaults(func=cmd_set_current)
 
     def add_school_fields(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--school", required=False, help="学校名称")
+        p.add_argument("--school", "--name", dest="school", required=False, help="学校名称（兼容旧写法：--name）")
         p.add_argument("--base-url", help="学校教务系统基础 URL，例如 https://jwgl.example.edu.cn")
         p.add_argument("--login-url", help="登录页 URL；不传时默认使用 /jsxsd/framework/jsMain.jsp")
         p.add_argument("--set-current", action="store_true", help="保存后设为当前学校")
@@ -550,12 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_school_update.set_defaults(func=cmd_school_update)
 
     p_school_remove = subparsers.add_parser("school-remove", help="删除学校 URL")
-    p_school_remove.add_argument("--school", required=False, help="学校名称")
+    p_school_remove.add_argument("--school", "--name", dest="school", required=False, help="学校名称（兼容旧写法：--name）")
     p_school_remove.add_argument("--force", action="store_true", help="若有老师绑定该学校，则解绑后继续删除")
     p_school_remove.set_defaults(func=cmd_school_remove)
 
     p_school_set = subparsers.add_parser("school-set-current", help="设置当前学校")
-    p_school_set.add_argument("--school", required=False, help="学校名称")
+    p_school_set.add_argument("--school", "--name", dest="school", required=False, help="学校名称（兼容旧写法：--name）")
     p_school_set.set_defaults(func=cmd_school_set_current)
 
     return parser
